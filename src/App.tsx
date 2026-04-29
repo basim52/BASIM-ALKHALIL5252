@@ -31,7 +31,6 @@ import {
   Video as VideoIcon,
   Download,
   AlertCircle,
-  Key,
   Youtube,
   BarChart3,
   TrendingUp,
@@ -52,6 +51,7 @@ import {
   Palmtree,
   Flame,
   Theater,
+  Share2,
   Plus,
   Trash2
 } from 'lucide-react';
@@ -143,7 +143,7 @@ function ToolNavigation({ activeTool, setActiveTool }: { activeTool: ToolType, s
   ];
 
   return (
-    <div className="flex flex-wrap gap-2 p-1.5 bg-slate-100/50 backdrop-blur-md border border-slate-200/50 rounded-2xl w-fit mx-auto mb-10 relative">
+    <div className="flex flex-nowrap overflow-x-auto no-scrollbar gap-2 p-1.5 bg-slate-100/50 backdrop-blur-md border border-slate-200/50 rounded-2xl w-[calc(100vw-32px)] md:w-fit mx-auto mb-10 relative">
       {tools.map((tool) => {
         const Icon = tool.icon;
         const isActive = activeTool === tool.id;
@@ -234,8 +234,6 @@ export default function App() {
   const [mediaResults, setMediaResults] = useState<{[key: string]: {type: 'image' | 'audio' | 'video' | 'music', url: string}}>({});
 
   // Checks
-  const [hasPaidKey, setHasPaidKey] = useState<boolean>(false);
-  const [showKeyDialog, setShowKeyDialog] = useState(false);
   const [voiceSelection, setVoiceSelection] = useState<string>('ar-XA-Wavenet-B'); // Default Arabic Male
 
   const fetchArchive = useCallback(async (userId: string) => {
@@ -330,15 +328,6 @@ export default function App() {
       setYtTokens(parsed);
       fetchYtStats(parsed);
     }
-    
-    // Check key
-    const checkKey = async () => {
-      if (typeof window !== 'undefined' && (window as any).aistudio) {
-        const hasKey = await (window as any).aistudio.hasSelectedApiKey();
-        setHasPaidKey(hasKey);
-      }
-    };
-    checkKey();
 
     return () => {
       unsubscribe();
@@ -365,14 +354,6 @@ export default function App() {
   };
 
   const logout = () => auth.signOut();
-
-  const handleOpenKeyDialog = useCallback(async () => {
-    if (typeof window !== 'undefined' && (window as any).aistudio) {
-      await (window as any).aistudio.openSelectKey();
-      setHasPaidKey(true);
-      setShowKeyDialog(false);
-    }
-  }, []);
 
   const saveToHistory = useCallback(async (content: GeneratedContent) => {
     if (!user) return; // Only archive for logged in users
@@ -654,11 +635,6 @@ export default function App() {
   };
 
   const generateSceneVideo = async (sceneId: string, visualPrompt: string) => {
-    if (!hasPaidKey) {
-      setShowKeyDialog(true);
-      return;
-    }
-
     setActiveGeneration(prev => ({...prev, [sceneId]: 'video'}));
     const characterConsistency = getCharacterTraits();
 
@@ -691,23 +667,13 @@ export default function App() {
       }
     } catch (e: any) {
       console.error(e);
-      if (e.message?.includes("Requested entity was not found")) {
-        setHasPaidKey(false);
-        setShowKeyDialog(true);
-      } else {
-        setError(formatGeminiError(e));
-      }
+      setError(formatGeminiError(e));
     } finally {
       setActiveGeneration(prev => ({...prev, [sceneId]: null}));
     }
   };
 
   const generateGlobalMusic = async () => {
-    if (!hasPaidKey) {
-      setShowKeyDialog(true);
-      return;
-    }
-
     if (!result?.title) return;
 
     setActiveGeneration(prev => ({...prev, 'global-music': 'music'}));
@@ -747,29 +713,31 @@ export default function App() {
       }
     } catch (e: any) {
       console.error(e);
-      if (e.message?.includes("Requested entity was not found")) {
-        setHasPaidKey(false);
-        setShowKeyDialog(true);
-      } else {
-        setError(formatGeminiError(e));
-      }
+      setError(formatGeminiError(e));
     } finally {
       setActiveGeneration(prev => ({...prev, 'global-music': null}));
     }
   };
 
+  const copyAppLink = () => {
+    const url = window.location.href;
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
-    <div className="min-h-screen bg-[#FDFDFF] text-slate-900 font-sans selection:bg-indigo-500/30" dir="rtl">
+    <div className="min-h-screen bg-[#FDFDFF] text-slate-900 font-sans selection:bg-indigo-500/30 pb-20 md:pb-0" dir="rtl">
       {/* High-End Navigation */}
-      <nav className="fixed top-0 left-0 w-full h-20 bg-white/60 backdrop-blur-2xl border-b border-slate-200/60 z-[100] flex items-center justify-between px-8 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
-        <div className="flex items-center gap-8">
-          <div className="flex items-center gap-3">
+      <nav className="fixed top-0 left-0 w-full h-16 md:h-20 bg-white/60 backdrop-blur-2xl border-b border-slate-200/60 z-[100] flex items-center justify-between px-4 md:px-8 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+        <div className="flex items-center gap-4 md:gap-8">
+          <div className="flex items-center gap-2 md:gap-3">
             <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-xl shadow-indigo-600/20 rotate-3">
               <Clapperboard size={20} />
             </div>
             <div className="flex flex-col">
-              <span className="text-sm font-display font-black tracking-tighter text-slate-900">استوديو فرفشة</span>
-              <span className="text-[8px] font-mono font-bold text-indigo-500 uppercase tracking-widest">Neural Pro Suite</span>
+              <span className="text-sm md:text-base font-display font-black tracking-tighter text-slate-900">استوديو فرفشة</span>
+              <span className="text-[8px] md:text-[9px] font-mono font-bold text-indigo-500 uppercase tracking-widest leading-none">Neural Pro Suite</span>
             </div>
           </div>
           
@@ -781,6 +749,13 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-4">
+          <button 
+            onClick={copyAppLink}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-all text-[10px] font-display font-black uppercase tracking-widest"
+          >
+            {copied ? <Check size={14} /> : <Share2 size={14} />}
+            <span>{copied ? 'تم نسخ الرابط' : 'مشاركة الرابط'}</span>
+          </button>
           <div className="hidden sm:flex flex-col items-end px-4 border-l border-slate-100">
             <span className="text-[10px] font-display font-black text-slate-900">{user?.displayName || 'ضيف استوديو'}</span>
             <span className="text-[8px] font-mono text-indigo-500 uppercase font-black">الحالة: متصل الآن</span>
@@ -806,9 +781,9 @@ export default function App() {
         </div>
       </nav>
 
-      <div className="flex pt-20">
+      <div className="flex pt-16 md:pt-20">
         {/* Rail Nav */}
-        <aside className="w-20 md:w-72 border-l border-slate-200 h-[calc(100vh-5rem)] sticky top-20 bg-white/40 backdrop-blur-xl flex flex-col items-center md:items-stretch overflow-y-auto z-40">
+        <aside className="hidden md:flex w-20 md:w-72 border-l border-slate-200 h-[calc(100vh-5rem)] sticky top-20 bg-white/40 backdrop-blur-xl flex flex-col items-center md:items-stretch overflow-y-auto z-40">
           <div className="p-6 space-y-10 flex-1">
             <div className="space-y-4">
               <p className="hidden md:block text-[9px] font-mono uppercase tracking-[0.3em] text-slate-400 px-4 mb-4 font-black">غرفة القيادة</p>
@@ -818,26 +793,6 @@ export default function App() {
               <SidebarItem active={activeTool === 'metadata'} icon={<Hash size={20} />} label="محسن SEO" onClick={() => setActiveTool('metadata')} />
               <SidebarItem active={activeTool === 'youtube'} icon={<Youtube size={20} />} label="تحليلات يوتيوب" onClick={() => setActiveTool('youtube')} />
               <SidebarItem active={activeTool === 'history'} icon={<Database size={20} />} label="الأرشيف السحابي" onClick={() => setActiveTool('history')} />
-            </div>
-
-            <div className="pt-6">
-              <button 
-                onClick={handleOpenKeyDialog}
-                className={`w-full p-4 rounded-2xl border flex items-center justify-between transition-all group ${hasPaidKey ? 'bg-indigo-50 border-indigo-200' : 'bg-red-50 border-red-200 hover:bg-red-100'}`}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-lg ${hasPaidKey ? 'bg-indigo-600 text-white' : 'bg-red-600 text-white animate-pulse'}`}>
-                    <Key size={14} />
-                  </div>
-                  <div className="md:flex flex-col items-end hidden">
-                    <p className="text-[10px] font-mono text-slate-400 uppercase tracking-widest leading-none">مفتاح API الخاص بك</p>
-                    <p className={`text-[11px] font-black uppercase ${hasPaidKey ? 'text-indigo-700' : 'text-red-700'}`}>
-                      {hasPaidKey ? 'متصل بنجاح' : 'غير مرتبط'}
-                    </p>
-                  </div>
-                </div>
-                {!hasPaidKey && <ChevronLeft size={14} className="text-red-400 group-hover:translate-x-1 transition-transform rotate-180 hidden md:block" />}
-              </button>
             </div>
 
             <div className="pt-10 border-t border-slate-200/50">
@@ -867,7 +822,7 @@ export default function App() {
 
         {/* Console View */}
         <main className="flex-1 min-h-screen bg-slate-50/30">
-          <div className="max-w-7xl mx-auto p-6 md:p-14">
+          <div className="max-w-7xl mx-auto p-4 md:p-14">
             <AnimatePresence mode="popLayout">
               {activeTool === 'history' ? (
                 <HistoryView 
@@ -894,15 +849,15 @@ export default function App() {
                 <div className="space-y-16">
                   {/* Master Terminal */}
                   <section className="space-y-8">
-                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 md:gap-6">
                       <div className="space-y-2">
-                        <div className="flex items-center gap-3">
-                          <div className="w-1.5 h-10 bg-indigo-600 rounded-full" />
-                          <h2 className="text-4xl font-display font-extrabold tracking-tight text-slate-900 capitalize">
+                        <div className="flex items-center gap-2 md:gap-3">
+                          <div className="w-1 md:w-1.5 h-6 md:h-10 bg-indigo-600 rounded-full" />
+                          <h2 className="text-2xl md:text-4xl font-display font-extrabold tracking-tight text-slate-900 capitalize">
                             تخليق {activeTool === 'script' ? 'السيناريو' : activeTool === 'prompt' ? 'المطالبات' : activeTool === 'ideas' ? 'الأفكار' : 'البيانات'}
                           </h2>
                         </div>
-                        <p className="text-slate-500 text-lg font-light max-w-2xl font-display">
+                        <p className="text-slate-500 text-base md:text-lg font-light max-w-2xl font-display">
                           {activeTool === 'script' && "توليد نصوص متعددة الوسائط مع مراجع بصرية ومعاينة صوتية ذكية."}
                           {activeTool === 'ideas' && "توليد أفكار إبداعية وجذابة لفيديوهاتك بناءً على مواضيعك المفضلة."}
                           {activeTool === 'prompt' && "هندسة مطالبات متقدمة وشاملة لشبكات توليد الفيديو العصبية."}
@@ -910,7 +865,7 @@ export default function App() {
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-4">
+                      <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-4 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
                         {(activeTool === 'script' || activeTool === 'ideas') && (
                           <>
                             <div className="bg-white border border-slate-200 p-4 rounded-3xl flex flex-col gap-2 shadow-sm min-w-[170px]">
@@ -969,7 +924,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap gap-2 overflow-x-auto pb-4 scrollbar-hide no-scrollbar relative z-10" dir="rtl">
+                    <div className="flex flex-nowrap md:flex-wrap gap-2 overflow-x-auto pb-4 no-scrollbar relative z-10 -mx-4 px-4 md:mx-0 md:px-0" dir="rtl" style={{ webkitOverflowScrolling: 'touch' }}>
                       {(Object.keys(styleLabels) as VideoStyle[]).map((key) => {
                         const label = styleLabels[key];
                         const Icon = {
@@ -1033,7 +988,7 @@ export default function App() {
                            <button 
                              onClick={generateContent}
                              disabled={isLoading || !input.trim()}
-                             className="bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:bg-slate-100 disabled:text-slate-300 px-10 py-5 rounded-2xl flex items-center justify-center gap-3 transition-all duration-300 group shadow-lg shadow-indigo-600/20"
+                             className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:bg-slate-200 text-slate-400 cursor-not-allowed shadow-none px-6 md:px-10 py-4 md:py-5 rounded-2xl flex items-center justify-center gap-3 transition-all duration-300 group shadow-lg shadow-indigo-600/20"
                            >
                              {isLoading ? (
                                <RefreshCw className="animate-spin w-5 h-5 text-white" />
@@ -1180,15 +1135,6 @@ export default function App() {
                             {error}
                           </p>
                         </div>
-                        
-                        {(error.includes("Quota") || error.includes("حصة") || error.includes("API")) && (
-                          <button 
-                            onClick={handleOpenKeyDialog}
-                            className="px-8 py-3 bg-slate-900 text-white rounded-xl font-display font-bold flex items-center gap-3 hover:bg-slate-800 transition-all active:scale-95 shadow-lg"
-                          >
-                            <Key size={16} /> تفعيل مفتاح API الخاص بك
-                          </button>
-                        )}
                       </motion.div>
                     )}
 
@@ -1409,7 +1355,38 @@ export default function App() {
           </AnimatePresence>
         </div>
       </main>
+      {/* Mobile Bottom Navigation */}
+      <div className="md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] bg-indigo-900 border border-indigo-700/50 z-[110] px-4 rounded-3xl shadow-2xl backdrop-blur-xl">
+        <div className="flex justify-around items-center h-16">
+          <MobileNavItem active={activeTool === 'script'} icon={<Clapperboard size={18} />} label="السيناريو" onClick={() => setActiveTool('script')} />
+          <MobileNavItem active={activeTool === 'ideas'} icon={<Lightbulb size={18} />} label="أفكار" onClick={() => setActiveTool('ideas')} />
+          <MobileNavItem active={activeTool === 'prompt'} icon={<Terminal size={18} />} label="مطالبة" onClick={() => setActiveTool('prompt')} />
+          <MobileNavItem active={activeTool === 'youtube'} icon={<Youtube size={18} />} label="يوتيوب" onClick={() => setActiveTool('youtube')} />
+          <MobileNavItem active={activeTool === 'history'} icon={<Database size={18} />} label="أرشيف" onClick={() => setActiveTool('history')} />
+        </div>
+      </div>
     </div>
   </div>
+  );
+}
+
+function MobileNavItem({ active, icon, label, onClick }: { active: boolean, icon: ReactNode, label: string, onClick: () => void }) {
+  return (
+    <button 
+      onClick={onClick}
+      className={`flex flex-col items-center gap-1 px-3 transition-all relative ${active ? 'text-white' : 'text-indigo-300'}`}
+    >
+      {active && (
+        <motion.div 
+          layoutId="mobile-nav-indicator"
+          className="absolute -top-3 w-8 h-1 bg-white rounded-full shadow-[0_0_8px_rgba(255,255,255,0.8)]"
+          transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+        />
+      )}
+      <div className={`p-0.5 transition-transform ${active ? 'scale-110 drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]' : ''}`}>
+        {icon}
+      </div>
+      <span className="text-[8px] font-display font-black uppercase tracking-tighter">{label}</span>
+    </button>
   );
 }
