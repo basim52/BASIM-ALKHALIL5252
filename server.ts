@@ -4,13 +4,22 @@ import path from "path";
 import { google } from "googleapis";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
+import { GoogleGenAI, GenerateVideosOperation } from "@google/genai";
 
 dotenv.config();
 
 const app = express();
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  }
+});
 const PORT = 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser());
 
 const oauth2Client = new google.auth.OAuth2(
@@ -106,6 +115,141 @@ app.post("/api/youtube/stats", async (req, res) => {
   } catch (error) {
     console.error("YouTube API Error:", error);
     res.status(500).json({ error: "Failed to fetch YouTube stats" });
+  }
+});
+
+// Advanced Veo Video Studio APIs
+app.post("/api/generate-video", async (req, res) => {
+  const { 
+    prompt, 
+    aspectRatio = '16:9', 
+    resolution = '720p',
+    startFrame, 
+    endFrame, 
+    styleReferences, 
+    videoToExtend, 
+    model = 'veo-3.1-lite-generate-preview'
+  } = req.body;
+
+  try {
+    const config: any = {
+      numberOfVideos: 1,
+      resolution,
+      aspectRatio
+    };
+
+    let activeModel = model;
+    if (videoToExtend || (styleReferences && styleReferences.length > 0)) {
+      activeModel = 'veo-3.1-generate-preview';
+    }
+
+    if (endFrame) {
+      config.lastFrame = {
+        imageBytes: endFrame,
+        mimeType: 'image/png'
+      };
+    }
+
+    if (styleReferences && styleReferences.length > 0) {
+      config.referenceImages = styleReferences.map((base64: string) => ({
+        image: {
+          imageBytes: base64,
+          mimeType: 'image/png'
+        },
+        referenceType: 'STYLE'
+      }));
+    }
+
+    const payload: any = {
+      model: activeModel,
+      prompt,
+      config
+    };
+
+    if (startFrame) {
+      payload.image = {
+        imageBytes: startFrame,
+        mimeType: 'image/png'
+      };
+    }
+
+    if (videoToExtend) {
+      payload.video = videoToExtend;
+    }
+
+    console.log(`Starting Veo video generation on model: ${activeModel}`);
+    const operation = await ai.models.generateVideos(payload);
+    res.json({ operationName: operation.name });
+  } catch (error: any) {
+    console.error("Video Generation Route Error:", error);
+    res.status(500).json({ error: error?.message || "Failed to start video generation" });
+  }
+});
+
+app.post("/api/video-status", async (req, res) => {
+  const { operationName } = req.body;
+  if (!operationName) {
+    return res.status(400).json({ error: "Missing operationName" });
+  }
+
+  try {
+    const op = new GenerateVideosOperation();
+    op.name = operationName;
+    const updated = await ai.operations.getVideosOperation({ operation: op });
+    res.json({ 
+      done: updated.done, 
+      error: updated.error,
+      response: updated.response 
+    });
+  } catch (error: any) {
+    console.error("Video Status Route Error:", error);
+    res.status(500).json({ error: error?.message || "Failed to fetch video status" });
+  }
+});
+
+app.post("/api/video-download", async (req, res) => {
+  const { operationName } = req.body;
+  if (!operationName) {
+    return res.status(400).json({ error: "Missing operationName" });
+  }
+
+  try {
+    const op = new GenerateVideosOperation();
+    op.name = operationName;
+    const updated = await ai.operations.getVideosOperation({ operation: op });
+    const uri = updated.response?.generatedVideos?.[0]?.video?.uri;
+    if (!uri) {
+      return res.status(404).json({ error: "Video URI not found or generation not completed" });
+    }
+
+    const videoRes = await fetch(uri, {
+      headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY || '' },
+    });
+
+    res.setHeader('Content-Type', 'video/mp4');
+
+    const reader = videoRes.body;
+    if (reader && typeof (reader as any).pipe === 'function') {
+      (reader as any).pipe(res);
+    } else if (reader && (reader as any).getReader) {
+      const streamReader = (reader as any).getReader();
+      const sendNext = async () => {
+        const { done, value } = await streamReader.read();
+        if (done) {
+          res.end();
+          return;
+        }
+        res.write(Buffer.from(value));
+        sendNext();
+      };
+      sendNext();
+    } else {
+      const buffer = await videoRes.arrayBuffer();
+      res.send(Buffer.from(buffer));
+    }
+  } catch (error: any) {
+    console.error("Video Download Route Error:", error);
+    res.status(500).json({ error: error?.message || "Failed to download video" });
   }
 });
 

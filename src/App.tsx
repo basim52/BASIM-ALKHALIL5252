@@ -13,6 +13,7 @@ import {
   Type as TypeIcon, 
   Camera, 
   ChevronLeft, 
+  ChevronDown,
   Copy, 
   Check, 
   RefreshCw,
@@ -169,13 +170,33 @@ function ToolNavigation({ activeTool, setActiveTool }: { activeTool: ToolType, s
   );
 }
 
+const cameraMovementOptions = [
+  { label: 'بان بطيء يمين', value: 'Slow Pan Right' },
+  { label: 'بان بطيء يسار', value: 'Slow Pan Left' },
+  { label: 'زوم تقدمي', value: 'Zoom In' },
+  { label: 'زوم تراجعي', value: 'Zoom Out' },
+  { label: 'تتبع الهدف', value: 'Track Target' },
+  { label: 'تحليق جوي', value: 'Aerial Flythrough' },
+  { label: 'دوران حول الهدف', value: 'Orbit Target' },
+  { label: 'رافعة صاعدة', value: 'Crane Up' },
+  { label: 'يدوي متحرك', value: 'Handheld' },
+  { label: 'ثابت تام', value: 'Static' },
+  { label: 'منظور أول', value: 'FPV' },
+  { label: 'تايم لابس', value: 'Time-lapse' }
+];
+
+const durationOptions = [15, 30, 60, 90, 120];
+const sceneOptions = [3, 5, 8, 10, 15];
+
 export default function App() {
   const [activeTool, setActiveTool] = useState<ToolType>('script');
   const [modelType, setModelType] = useState<'flash' | 'pro'>('flash');
+  const [viewMode, setViewMode] = useState<'full' | 'phone'>('full');
   const [videoStyle, setVideoStyle] = useState<VideoStyle>('cinematic');
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('16:9');
   const [videoDuration, setVideoDuration] = useState(60);
   const [sceneCount, setSceneCount] = useState(5);
+  const [cameraMovement, setCameraMovement] = useState('ثابت تام');
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -472,7 +493,8 @@ export default function App() {
       let responseSchema: any = null;
 
       if (activeTool === 'script') {
-        promptText = `قم بتطوير سيناريو درامي متكامل بنمط ${activeStyleLabel} بمدة ${videoDuration} ثانية يتكون من ${sceneCount} مشاهد. اتبع هيكل الفصول الثلاثة (بداية، وسط/ذروة، نهاية مؤلمة أو ملهمة). الموضوع: "${input}".`;
+        const camMoveEn = cameraMovementOptions.find(o => o.label === cameraMovement)?.value || 'Static';
+        promptText = `قم بتطوير سيناريو درامي متكامل بنمط ${activeStyleLabel} بمدة ${videoDuration} ثانية يتكون من ${sceneCount} مشاهد وحركة كاميرا ${cameraMovement} (${camMoveEn}). اتبع هيكل الفصول الثلاثة (بداية، وسط/ذروة، نهاية مؤلمة أو ملهمة). الموضوع: "${input}".`;
         responseSchema = {
           type: Type.OBJECT,
           properties: {
@@ -634,36 +656,166 @@ export default function App() {
     }
   };
 
-  const generateSceneVideo = async (sceneId: string, visualPrompt: string) => {
+  const urlToBase64 = async (url: string): Promise<string | null> => {
+    try {
+      if (url.startsWith('data:')) {
+        return url.split(',')[1];
+      }
+      const resp = await fetch(url);
+      const blob = await resp.blob();
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64 = reader.result?.toString().split(',')[1];
+          resolve(base64 || null);
+        };
+        reader.readAsDataURL(blob);
+      });
+    } catch (err) {
+      console.error("Failed to convert url to base64:", err);
+      return null;
+    }
+  };
+
+  const generateSceneVideo = async (
+    sceneId: string, 
+    visualPrompt: string, 
+    options?: { extendOnly?: boolean }
+  ) => {
     setActiveGeneration(prev => ({...prev, [sceneId]: 'video'}));
     const characterConsistency = getCharacterTraits();
+    const sceneIdx = result.script.findIndex((s: any) => s.id === sceneId);
+    const scene = result.script[sceneIdx];
 
     try {
-      let operation = await ai.models.generateVideos({
-        model: 'veo-3.1-lite-generate-preview',
-        prompt: `Cinematic high-quality video for: ${visualPrompt}. Realistic, ${activeStyleLabelEn} style. Detailed textures, smooth camera motion. ${aspectRatio === '9:16' ? 'Vertical 9:16 orientation.' : 'Horizontal 16:9 orientation.'}. ${characterConsistency}`,
-        config: {
-          numberOfVideos: 1,
-          resolution: '720p',
-          aspectRatio
-        }
-      });
+      let startFrameBase64: string | null = null;
+      let endFrameBase64: string | null = null;
+      const styleRefBase64s: string[] = [];
+      let videoToExtend: any = null;
 
-      // Poll for completion
-      while (!operation.done) {
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        operation = await ai.operations.getVideosOperation({ operation });
+      // Handle custom prompt based on selected transition type
+      let transitionPromptClause = "";
+      if (scene?.transitionType && scene.transitionType !== 'none') {
+        const tType = scene.transitionType;
+        if (tType === 'cross_fade') {
+          transitionPromptClause = " Incorporate a smooth fading transition from the previous moment.";
+        } else if (tType === 'push_pan') {
+          transitionPromptClause = " Employ a continuous moving camera transition (pan or zoom).";
+        } else if (tType === 'match_frame') {
+          transitionPromptClause = " Ensure perfect scene-to-scene seamless visual flow and continuity from the starting image.";
+        }
+        if (scene.transitionPrompt) {
+          transitionPromptClause += ` Transition dynamic: ${scene.transitionPrompt}.`;
+        }
       }
 
-      const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-      if (downloadLink) {
-        const response = await fetch(downloadLink, {
-          method: 'GET',
-          headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY || '' },
+      // 1. Process match_frame (starting frame continuity)
+      if (scene?.transitionType === 'match_frame' && sceneIdx > 0) {
+        const prevScene = result.script[sceneIdx - 1];
+        const prevImageUrl = mediaResults[prevScene.id]?.url;
+        if (prevImageUrl) {
+          startFrameBase64 = await urlToBase64(prevImageUrl);
+        }
+      }
+
+      // 2. Process style references (Style Transfer)
+      if (scene?.styleRefType === 'prev_frame' && sceneIdx > 0) {
+        const prevScene = result.script[sceneIdx - 1];
+        const prevImageUrl = mediaResults[prevScene.id]?.url;
+        if (prevImageUrl) {
+          const b64 = await urlToBase64(prevImageUrl);
+          if (b64) styleRefBase64s.push(b64);
+        }
+      } else if (scene?.styleRefType === 'custom' && scene.styleRefImage) {
+        styleRefBase64s.push(scene.styleRefImage);
+      } else if (scene?.styleRefType === 'this_frame') {
+        const thisImageUrl = mediaResults[sceneId]?.url;
+        if (thisImageUrl) {
+          const b64 = await urlToBase64(thisImageUrl);
+          if (b64) styleRefBase64s.push(b64);
+        }
+      }
+
+      // 3. Process video extension
+      if (options?.extendOnly && scene.videoObject) {
+        videoToExtend = scene.videoObject;
+      }
+
+      // Assemble final prompt
+      const finalPrompt = options?.extendOnly 
+        ? (scene.extendPrompt || `Continue the visual story from the previous action.`)
+        : `Cinematic high-quality video for: ${visualPrompt}.${transitionPromptClause} Realistic, ${activeStyleLabelEn} style. Detailed textures, smooth camera motion. ${aspectRatio === '9:16' ? 'Vertical 9:16 orientation.' : 'Horizontal 16:9 orientation.'}. ${characterConsistency}`;
+
+      // Call Express start generation API
+      const startResp = await fetch("/api/generate-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: finalPrompt,
+          aspectRatio,
+          resolution: '720p',
+          startFrame: startFrameBase64,
+          endFrame: endFrameBase64,
+          styleReferences: styleRefBase64s,
+          videoToExtend,
+          model: 'veo-3.1-lite-generate-preview'
+        })
+      });
+
+      if (!startResp.ok) {
+        const errJson = await startResp.json();
+        throw new Error(errJson.error || "خطأ في بدء عملية الفيديو");
+      }
+
+      const { operationName } = await startResp.json();
+
+      // Poll server for operation progress
+      let done = false;
+      let finalResponse: any = null;
+
+      while (!done) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        const statusResp = await fetch("/api/video-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ operationName })
         });
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        setMediaResults(prev => ({...prev, [`video-${sceneId}`]: { type: 'video', url }}));
+        
+        if (statusResp.ok) {
+          const statusJson = await statusResp.json();
+          done = statusJson.done;
+          if (statusJson.error) {
+            throw new Error(statusJson.error.message || "فشلت معالجة مقطع الفيديو");
+          }
+          if (done) {
+            finalResponse = statusJson.response;
+          }
+        } else {
+          console.warn("Retrying video status check...");
+        }
+      }
+
+      // Secure Proxy Video Streams download
+      if (finalResponse?.generatedVideos?.[0]?.video) {
+        const videoObj = finalResponse.generatedVideos[0].video;
+        
+        // Save the video reference inside scene so we can extend it later
+        updateScene(sceneId, { videoObject: videoObj });
+
+        // Stream binary download securely
+        const downloadResp = await fetch("/api/video-download", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ operationName })
+        });
+
+        if (downloadResp.ok) {
+          const blob = await downloadResp.blob();
+          const url = URL.createObjectURL(blob);
+          setMediaResults(prev => ({...prev, [`video-${sceneId}`]: { type: 'video', url }}));
+        } else {
+          throw new Error("فشل تحميل دفق ملف الفيديو النهائي");
+        }
       }
     } catch (e: any) {
       console.error(e);
@@ -732,12 +884,12 @@ export default function App() {
       <nav className="fixed top-0 left-0 w-full h-16 md:h-20 bg-white/60 backdrop-blur-2xl border-b border-slate-200/60 z-[100] flex items-center justify-between px-4 md:px-8 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
         <div className="flex items-center gap-4 md:gap-8">
           <div className="flex items-center gap-2 md:gap-3">
-            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-xl shadow-indigo-600/20 rotate-3">
-              <Clapperboard size={20} />
+            <div className="w-9 h-9 md:w-11 md:h-11 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-xl shadow-indigo-600/20 rotate-3 transform transition-transform hover:rotate-0">
+              <Clapperboard size={18} className="md:w-6 md:h-6" />
             </div>
             <div className="flex flex-col">
-              <span className="text-sm md:text-base font-display font-black tracking-tighter text-slate-900">استوديو فرفشة</span>
-              <span className="text-[8px] md:text-[9px] font-mono font-bold text-indigo-500 uppercase tracking-widest leading-none">Neural Pro Suite</span>
+              <span className="text-xs md:text-lg font-display font-black tracking-tighter text-slate-900 leading-none">استوديو فرفشة</span>
+              <span className="text-[7px] md:text-[10px] font-mono font-bold text-indigo-500 uppercase tracking-widest leading-none mt-0.5">Neural Pro Suite</span>
             </div>
           </div>
           
@@ -748,13 +900,22 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 md:gap-4">
+          <button 
+            onClick={() => setViewMode(prev => prev === 'full' ? 'phone' : 'full')}
+            className="hidden lg:flex items-center gap-2 px-3 md:px-4 py-2 bg-slate-50 border border-slate-100 text-slate-700 rounded-xl hover:bg-slate-100 hover:text-indigo-600 transition-all text-[9.5px] md:text-[10px] font-display font-black uppercase tracking-widest cursor-pointer"
+            title="تحويل العرض بين الشاشة الكاملة ومحاكاة هاتف محمول"
+          >
+            <Monitor size={12} className={viewMode === 'full' ? 'text-indigo-600' : 'text-slate-400'} />
+            <span>{viewMode === 'full' ? 'بيئة الجوال' : 'العرض الكامل'}</span>
+          </button>
+          
           <button 
             onClick={copyAppLink}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-all text-[10px] font-display font-black uppercase tracking-widest"
+            className="flex items-center gap-2 px-3 md:px-4 py-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-all text-[9px] md:text-[10px] font-display font-black uppercase tracking-widest"
           >
-            {copied ? <Check size={14} /> : <Share2 size={14} />}
-            <span>{copied ? 'تم نسخ الرابط' : 'مشاركة الرابط'}</span>
+            {copied ? <Check size={12} className="md:w-3.5 md:h-3.5" /> : <Share2 size={12} className="md:w-3.5 md:h-3.5" />}
+            <span className="hidden sm:inline">{copied ? 'تم نسخ الرابط' : 'مشاركة الرابط'}</span>
           </button>
           <div className="hidden sm:flex flex-col items-end px-4 border-l border-slate-100">
             <span className="text-[10px] font-display font-black text-slate-900">{user?.displayName || 'ضيف استوديو'}</span>
@@ -783,7 +944,7 @@ export default function App() {
 
       <div className="flex pt-16 md:pt-20">
         {/* Rail Nav */}
-        <aside className="hidden md:flex w-20 md:w-72 border-l border-slate-200 h-[calc(100vh-5rem)] sticky top-20 bg-white/40 backdrop-blur-xl flex flex-col items-center md:items-stretch overflow-y-auto z-40">
+        <aside className={`${viewMode === 'phone' ? 'lg:hidden' : ''} hidden md:flex w-20 md:w-72 border-l border-slate-200 h-[calc(100vh-5rem)] sticky top-20 bg-white/40 backdrop-blur-xl flex flex-col items-center md:items-stretch overflow-y-auto z-40`}>
           <div className="p-6 space-y-10 flex-1">
             <div className="space-y-4">
               <p className="hidden md:block text-[9px] font-mono uppercase tracking-[0.3em] text-slate-400 px-4 mb-4 font-black">غرفة القيادة</p>
@@ -821,9 +982,40 @@ export default function App() {
         </aside>
 
         {/* Console View */}
-        <main className="flex-1 min-h-screen bg-slate-50/30">
-          <div className="max-w-7xl mx-auto p-4 md:p-14">
-            <AnimatePresence mode="popLayout">
+        <main className={`flex-1 min-h-screen transition-all duration-500 ${viewMode === 'phone' ? 'lg:bg-slate-100/80 lg:flex lg:items-center lg:justify-center lg:py-10' : 'bg-slate-50/30'}`}>
+          <div className={viewMode === 'phone' 
+            ? "w-full max-w-7xl mx-auto p-4 md:p-14 lg:p-0 lg:w-[395px] lg:h-[844px] lg:bg-white lg:rounded-[48px] lg:shadow-[0_30px_70px_-15px_rgba(79,70,229,0.15),0_15px_30px_-10px_rgba(0,0,0,0.1)] lg:border-[10px] lg:border-slate-900 lg:flex lg:flex-col lg:overflow-hidden lg:relative lg:select-none lg:text-right lg:no-scrollbar lg:transition-all lg:duration-500 hover:shadow-[0_35px_80px_-10px_rgba(79,70,229,0.22)]"
+            : "max-w-7xl mx-auto p-4 md:p-14 transition-all duration-500"
+          }>
+            {/* If viewMode === 'phone', show simulated headers inside phone shell on desktop */}
+            {viewMode === 'phone' && (
+              <div className="hidden lg:block select-none pointer-events-none">
+                {/* Physical volume and power buttons outlines */}
+                <div className="absolute top-28 -left-[11px] w-[2.5px] h-14 bg-slate-700 rounded-l" />
+                <div className="absolute top-44 -left-[11px] w-[2.5px] h-14 bg-slate-700 rounded-l" />
+                <div className="absolute top-36 -right-[11px] w-[2.5px] h-20 bg-slate-700 rounded-r" />
+
+                {/* iPhone Dynamic Island */}
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 w-28 h-6.5 bg-slate-950 rounded-full z-[150] flex items-center justify-between px-3 text-[10px] text-zinc-400 select-none">
+                  <div className="w-1.5 h-1.5 rounded-full bg-indigo-500/80 animate-pulse" />
+                  <div className="w-12 h-1 bg-zinc-900 rounded-full" />
+                </div>
+
+                {/* iPhone Status Bar */}
+                <div className="h-10 bg-white flex items-center justify-between px-6 text-[10px] font-black text-slate-800 pt-3.5 z-[140] border-b border-slate-100">
+                  <span dir="ltr">09:41</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[7px] text-indigo-500 uppercase font-bold tracking-widest bg-indigo-50/80 px-1 py-0.5 rounded">PRO 5G</span>
+                    <Database size={10} className="text-emerald-500" />
+                    <Activity size={10} className="text-indigo-500 animate-pulse" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* The workspace content scroll wrapper inside simulated phone on desktop */}
+            <div className={viewMode === 'phone' ? "lg:flex-1 lg:overflow-y-auto lg:p-6 lg:pb-32 lg:no-scrollbar lg:bg-[#FDFDFF] lg:scrollbar-none" : ""}>
+              <AnimatePresence mode="popLayout">
               {activeTool === 'history' ? (
                 <HistoryView 
                   history={history} 
@@ -857,7 +1049,7 @@ export default function App() {
                             تخليق {activeTool === 'script' ? 'السيناريو' : activeTool === 'prompt' ? 'المطالبات' : activeTool === 'ideas' ? 'الأفكار' : 'البيانات'}
                           </h2>
                         </div>
-                        <p className="text-slate-500 text-base md:text-lg font-light max-w-2xl font-display">
+                        <p className="text-slate-500 text-xs md:text-sm font-light max-w-2xl font-display">
                           {activeTool === 'script' && "توليد نصوص متعددة الوسائط مع مراجع بصرية ومعاينة صوتية ذكية."}
                           {activeTool === 'ideas' && "توليد أفكار إبداعية وجذابة لفيديوهاتك بناءً على مواضيعك المفضلة."}
                           {activeTool === 'prompt' && "هندسة مطالبات متقدمة وشاملة لشبكات توليد الفيديو العصبية."}
@@ -865,137 +1057,231 @@ export default function App() {
                         </p>
                       </div>
 
-                      <div className="flex flex-col md:flex-row md:items-center gap-3 md:gap-4 overflow-x-auto no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
-                        {(activeTool === 'script' || activeTool === 'ideas') && (
-                          <>
-                            <div className="bg-white border border-slate-200 p-4 rounded-3xl flex flex-col gap-2 shadow-sm min-w-[170px]">
-                              <div className="flex justify-between items-center">
-                                <div className="flex items-center gap-2">
-                                  <Clock size={12} className="text-indigo-600" />
-                                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">المدة الزمنية</span>
-                                </div>
-                                <span className="text-xs font-bold text-indigo-600">{videoDuration}s</span>
-                              </div>
-                              <input 
-                                type="range" 
-                                min="8" 
-                                max="120" 
-                                step="1"
-                                value={videoDuration}
-                                onChange={(e) => setVideoDuration(parseInt(e.target.value))}
-                                className="h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-indigo-600 w-full"
-                              />
-                            </div>
-
-                            <div className="bg-white border border-slate-200 p-4 rounded-3xl flex flex-col gap-2 shadow-sm min-w-[170px]">
-                              <div className="flex justify-between items-center">
-                                <div className="flex items-center gap-2">
-                                  <Layers size={12} className="text-violet-600" />
-                                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">عدد المشاهد</span>
-                                </div>
-                                <span className="text-xs font-bold text-violet-600">{sceneCount}</span>
-                              </div>
-                              <input 
-                                type="range" 
-                                min="3" 
-                                max="15" 
-                                step="1"
-                                value={sceneCount}
-                                onChange={(e) => setSceneCount(parseInt(e.target.value))}
-                                className="h-1.5 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-violet-600 w-full"
-                              />
-                            </div>
-                          </>
-                        )}
-
-                        <div className="bg-white border border-slate-200 p-4 rounded-3xl flex flex-col gap-2 shadow-sm min-w-[140px]">
-                           <div className="flex justify-between items-center">
-                              <div className="flex items-center gap-2">
-                                <Zap size={12} className="text-amber-500" />
-                                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">سرعة المحرك</span>
-                              </div>
-                              <span className="text-[10px] font-bold text-amber-600 uppercase">{modelType === 'flash' ? 'سريع جداً' : 'دقة فائقة'}</span>
+                      {/* AI Expert Co-pilots stacked mini avatars ring */}
+                      <div className="flex items-center justify-between bg-white border border-slate-100 p-2.5 md:p-3 rounded-2xl md:rounded-3xl shadow-xs w-full md:w-fit gap-4 select-none">
+                        <div className="flex flex-col text-right">
+                          <span className="text-[7px] md:text-[8px] font-mono text-slate-400 font-extrabold uppercase tracking-widest leading-none">مصفوفة المعالجة النشطة</span>
+                          <span className="text-[9px] md:text-[10px] font-black text-slate-800 font-display mt-0.5 whitespace-nowrap">الشركاء الذكيين (AI Co-Pilots)</span>
+                        </div>
+                        
+                        <div className="flex items-center -space-x-2 rtl:space-x-reverse">
+                           <div className="w-6.5 h-6.5 md:w-7 md:h-7 rounded-full border-1.5 border-white bg-indigo-600 flex items-center justify-center text-white ring-2 ring-indigo-500/10 shadow-xs hover:-translate-y-0.5 transition-all cursor-help relative group" title="Gemini Core">
+                             <Sparkles size={9} />
+                             <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-slate-950 text-[8px] text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-[135] shadow-lg border border-white/5">Gemini Writer</span>
                            </div>
-                           <div className="flex bg-slate-50 p-1 rounded-xl">
-                              <button onClick={() => setModelType('flash')} className={`flex-1 py-1.5 text-[9px] font-black uppercase tracking-tighter rounded-lg transition-all ${modelType === 'flash' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>Flash</button>
-                              <button onClick={() => setModelType('pro')} className={`flex-1 py-1.5 text-[9px] font-black uppercase tracking-tighter rounded-lg transition-all ${modelType === 'pro' ? 'bg-white shadow-sm text-indigo-600' : 'text-slate-400'}`}>Pro</button>
+                           <div className="w-6.5 h-6.5 md:w-7 md:h-7 rounded-full border-1.5 border-white bg-emerald-600 flex items-center justify-center text-white shadow-xs hover:-translate-y-0.5 transition-all cursor-help relative group" title="Veo Animator">
+                             <Video size={9} />
+                             <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-slate-950 text-[8px] text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-[135] shadow-lg border border-white/5">Veo Animator</span>
+                           </div>
+                           <div className="w-6.5 h-6.5 md:w-7 md:h-7 rounded-full border-1.5 border-white bg-amber-500 flex items-center justify-center text-white shadow-xs hover:-translate-y-0.5 transition-all cursor-help relative group" title="Synth Sound AI">
+                             <Mic size={9} />
+                             <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-slate-950 text-[8px] text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-[135] shadow-lg border border-white/5">Synth Sound AI</span>
+                           </div>
+                           <div className="w-6.5 h-6.5 md:w-7 md:h-7 rounded-full border-1.5 border-white bg-red-600 flex items-center justify-center text-white shadow-xs hover:-translate-y-0.5 transition-all cursor-help relative group" title="YouTube Analytics">
+                             <Youtube size={9} />
+                             <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-slate-950 text-[8px] text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-[135] shadow-lg border border-white/5">YouTube Sync</span>
+                           </div>
+                           <div className="w-6.5 h-6.5 md:w-7 md:h-7 rounded-full border-1.5 border-white bg-violet-600 flex items-center justify-center text-white shadow-xs hover:-translate-y-0.5 transition-all cursor-help relative group" title="Cloud Database">
+                             <Database size={9} />
+                             <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-slate-950 text-[8px] text-white rounded-md opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-[135] shadow-lg border border-white/5">Cloud Database</span>
                            </div>
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex flex-nowrap md:flex-wrap gap-2 overflow-x-auto pb-4 no-scrollbar relative z-10 -mx-4 px-4 md:mx-0 md:px-0" dir="rtl" style={{ webkitOverflowScrolling: 'touch' }}>
-                      {(Object.keys(styleLabels) as VideoStyle[]).map((key) => {
-                        const label = styleLabels[key];
-                        const Icon = {
-                          cinematic: Film,
-                          netflix: Monitor,
-                          hollywood: Star,
-                          bollywood: Music,
-                          egyptian: Flame,
-                          syrian: Drama,
-                          saudi: Palmtree,
-                          vlog: Camera,
-                          dramatic: Theater,
-                          educational: BookOpen,
-                          horror: Ghost
-                        }[key] || Sparkles;
+                    <div className="w-full max-w-xl md:max-w-2xl mx-auto bg-slate-50/45 p-3 rounded-3xl border border-slate-100 shadow-xs">
+                      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-2 md:gap-2.5">
+                        {(activeTool === 'script' || activeTool === 'ideas') && (
+                          <>
+                            {/* Duration Select */}
+                            <div className="bg-white border border-slate-200/80 p-2.5 rounded-2xl flex flex-col gap-1.5 shadow-xs min-w-0">
+                              <div className="flex justify-between items-center px-0.5">
+                                <div className="flex items-center gap-1">
+                                  <Clock size={10} className="text-indigo-600" />
+                                  <span className="text-[8px] md:text-[9.5px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">المدة</span>
+                                </div>
+                              </div>
+                              <div className="relative">
+                                <select 
+                                  value={videoDuration}
+                                  onChange={(e) => setVideoDuration(Number(e.target.value))}
+                                  className="w-full bg-slate-50/60 border border-slate-100 hover:border-indigo-100 rounded-xl px-2 py-1 pr-6 text-[9.5px] md:text-[11px] font-black text-slate-700 outline-none appearance-none focus:ring-1.5 focus:ring-indigo-500/15 focus:border-indigo-400 transition-all cursor-pointer text-right"
+                                >
+                                  {durationOptions.map(dur => (
+                                    <option key={dur} value={dur}>
+                                      {dur} ثانية
+                                    </option>
+                                  ))}
+                                </select>
+                                <div className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                  <ChevronDown size={11} />
+                                </div>
+                              </div>
+                            </div>
 
-                        const isActive = videoStyle === key;
+                            {/* Scene Count Select */}
+                            <div className="bg-white border border-slate-200/80 p-2.5 rounded-2xl flex flex-col gap-1.5 shadow-xs min-w-0">
+                              <div className="flex justify-between items-center px-0.5">
+                                <div className="flex items-center gap-1">
+                                  <Layers size={10} className="text-violet-600" />
+                                  <span className="text-[8px] md:text-[9.5px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">المشاهد</span>
+                                </div>
+                              </div>
+                              <div className="relative">
+                                <select 
+                                  value={sceneCount}
+                                  onChange={(e) => setSceneCount(Number(e.target.value))}
+                                  className="w-full bg-slate-50/60 border border-slate-100 hover:border-violet-100 rounded-xl px-2 py-1 pr-6 text-[9.5px] md:text-[11px] font-black text-slate-700 outline-none appearance-none focus:ring-1.5 focus:ring-violet-500/15 focus:border-violet-400 transition-all cursor-pointer text-right"
+                                >
+                                  {sceneOptions.map(sc => (
+                                    <option key={sc} value={sc}>
+                                      {sc} مشاهد
+                                    </option>
+                                  ))}
+                                </select>
+                                <div className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                  <ChevronDown size={11} />
+                                </div>
+                              </div>
+                            </div>
 
-                        return (
-                          <button
-                            key={key}
-                            onClick={() => setVideoStyle(key)}
-                            className={`px-5 py-3 rounded-2xl border flex items-center gap-3 transition-all whitespace-nowrap font-display text-[10px] font-black uppercase tracking-widest group ${
-                              isActive 
-                              ? 'bg-indigo-600 text-white border-indigo-600 shadow-xl shadow-indigo-600/30' 
-                              : 'bg-white text-slate-500 border-slate-200 hover:border-indigo-300 hover:text-indigo-600 hover:bg-slate-50'
-                            }`}
-                          >
-                            <Icon size={16} className={`${isActive ? 'text-white' : 'text-indigo-500 group-hover:scale-110 transition-transform'}`} />
-                            {label}
-                          </button>
-                        );
-                      })}
+                            {/* Camera Movement Select */}
+                            <div className="bg-white border border-slate-200/80 p-2.5 rounded-2xl flex flex-col gap-1.5 shadow-xs min-w-0">
+                              <div className="flex justify-between items-center px-0.5">
+                                <div className="flex items-center gap-1">
+                                  <Camera size={10} className="text-emerald-600" />
+                                  <span className="text-[8px] md:text-[9.5px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">حركة الكاميرا</span>
+                                </div>
+                              </div>
+                              <div className="relative">
+                                <select 
+                                  value={cameraMovement}
+                                  onChange={(e) => setCameraMovement(e.target.value)}
+                                  className="w-full bg-slate-50/60 border border-slate-100 hover:border-emerald-100 rounded-xl px-2 py-1 pr-6 text-[9.5px] md:text-[11px] font-black text-slate-700 outline-none appearance-none focus:ring-1.5 focus:ring-emerald-500/15 focus:border-emerald-400 transition-all cursor-pointer text-right"
+                                >
+                                  {cameraMovementOptions.map(opt => (
+                                    <option key={opt.label} value={opt.label}>
+                                      {opt.label}
+                                    </option>
+                                  ))}
+                                </select>
+                                <div className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                  <ChevronDown size={11} />
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Video Style Select */}
+                            <div className="bg-white border border-slate-200/80 p-2.5 rounded-2xl flex flex-col gap-1.5 shadow-xs min-w-0">
+                              <div className="flex justify-between items-center px-0.5">
+                                <div className="flex items-center gap-1">
+                                  <Film size={10} className="text-rose-600" />
+                                  <span className="text-[8px] md:text-[9.5px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">نمط الفيديو</span>
+                                </div>
+                              </div>
+                              <div className="relative">
+                                <select 
+                                  value={videoStyle}
+                                  onChange={(e) => setVideoStyle(e.target.value as VideoStyle)}
+                                  className="w-full bg-slate-50/60 border border-slate-100 hover:border-rose-100 rounded-xl px-2 py-1 pr-6 text-[9.5px] md:text-[11px] font-black text-slate-700 outline-none appearance-none focus:ring-1.5 focus:ring-rose-500/15 focus:border-rose-400 transition-all cursor-pointer text-right"
+                                >
+                                  {(Object.keys(styleLabels) as VideoStyle[]).map((key) => (
+                                    <option key={key} value={key}>
+                                      {styleLabels[key]}
+                                    </option>
+                                  ))}
+                                </select>
+                                <div className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                  <ChevronDown size={11} />
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )}
+
+                        {/* Model Engine Speed Selection */}
+                        <div className={`bg-white border border-slate-200/80 p-2.5 rounded-2xl flex flex-col gap-1 shadow-xs min-w-0 ${(activeTool === 'script' || activeTool === 'ideas') ? 'col-span-2 lg:col-span-1' : 'col-span-2 max-w-sm mx-auto w-full'}`}>
+                           <div className="flex justify-between items-center px-0.5">
+                              <div className="flex items-center gap-1">
+                                <Zap size={10} className="text-amber-500" />
+                                <span className="text-[8px] md:text-[9.5px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">سرعة المحرك</span>
+                              </div>
+                              <span className="text-[8px] md:text-[9px] font-bold text-amber-600 uppercase">{modelType === 'flash' ? 'سريع' : 'دقة'}</span>
+                           </div>
+                           <div className="flex bg-slate-50 p-0.5 rounded-lg">
+                              <button onClick={() => setModelType('flash')} className={`flex-1 py-1 text-[8px] md:text-[9px] font-black uppercase tracking-tighter rounded-md transition-all ${modelType === 'flash' ? 'bg-white shadow-xs text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>Flash</button>
+                              <button onClick={() => setModelType('pro')} className={`flex-1 py-1 text-[8px] md:text-[9px] font-black uppercase tracking-tighter rounded-md transition-all ${modelType === 'pro' ? 'bg-white shadow-xs text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>Pro</button>
+                           </div>
+                        </div>
+                      </div>
                     </div>
+
+                    {/* Overlapping characters casting lineup */}
+                    {characters && characters.length > 0 && characters.some(c => c.name.trim() !== '') && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="flex items-center gap-2.5 px-4 py-2 bg-white/60 backdrop-blur-md border border-slate-200/50 rounded-2xl w-fit"
+                      >
+                        <span className="text-[8px] md:text-[9px] font-black text-slate-400 font-display uppercase tracking-widest leading-none">طاقم تمثيل السيناريو الذكي:</span>
+                        <div className="flex items-center -space-x-2 rtl:space-x-reverse">
+                          {characters.filter(c => c.name.trim() !== '').map((char, index) => (
+                            <div 
+                              key={char.id || index}
+                              className="w-7 h-7 rounded-full border-2 border-white bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center text-[9px] font-black text-white shadow-sm hover:scale-115 hover:z-10 transition-all cursor-help relative group/cast"
+                            >
+                              {char.name ? char.name.substring(0, 2).toUpperCase() : `C`}
+                              
+                              {/* Cast mini bio tooltip */}
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 p-3 bg-slate-950 text-white rounded-xl shadow-xl border border-white/5 opacity-0 invisible group-hover/cast:opacity-100 group-hover/cast:visible transition-all text-right text-[9px] space-y-1 select-none pointer-events-none z-[120] w-48">
+                                <p className="font-black text-indigo-400 text-[10px] border-b border-white/10 pb-1 mb-1 truncate">{char.name}</p>
+                                <p className="text-zinc-400 font-medium">العمر: {char.age || 'غير محدد'}</p>
+                                <p className="text-zinc-400 font-medium font-sans">الجنس: {char.gender || 'غير محدد'}</p>
+                                <p className="text-zinc-400 font-medium">الملامح: {char.hair || 'غير محدد'}</p>
+                                <p className="text-zinc-400 font-medium">الملابس: {char.clothing || 'غير محدد'}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
 
                     <div className="relative">
                       <div className="absolute inset-0 bg-indigo-600/5 blur-3xl opacity-50" />
-                      <div className="relative bg-white border border-slate-200 rounded-3xl p-3 flex flex-col md:flex-row gap-3 shadow-xl overflow-hidden backdrop-blur-sm">
+                      <div className="relative bg-white border border-slate-200 rounded-2xl md:rounded-3xl p-2 md:p-3 flex flex-col md:flex-row gap-2 md:gap-3 shadow-xl overflow-hidden backdrop-blur-sm">
                         {modelType === 'pro' && (
                           <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-indigo-600 to-violet-600 shadow-lg shadow-indigo-500/20" />
                         )}
-                        <div className="flex-1 flex items-center px-4 py-4 md:py-0">
+                        <div className="flex-1 flex items-center px-4 py-3 md:py-0">
                           <input
                             type="text"
-                            placeholder="اكتب بذرة القصة هنا.. (مثال: صراع بين أخوين على إرث قديم ينتهي باكتشاف صادم)"
-                            className="w-full bg-transparent outline-none text-xl text-slate-800 placeholder:text-slate-300 font-display font-medium text-right"
+                            placeholder="اكتب بذرة القصة هنا.."
+                            className="w-full bg-transparent outline-none text-base md:text-xl text-slate-800 placeholder:text-slate-300 font-display font-medium text-right"
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && generateContent()}
                           />
                         </div>
-                        <div className="flex items-center gap-2 pr-2">
+                        <div className="flex items-center gap-2 px-1 pb-1 md:pb-0 md:pr-2">
                            <button 
                              onClick={() => setShowCharConfig(!showCharConfig)}
-                             className={`p-4 rounded-2xl transition-all flex items-center gap-2 border ${showCharConfig ? 'bg-slate-900 text-white border-slate-900 shadow-lg' : 'bg-white text-slate-500 border-slate-100 hover:border-indigo-200'}`}
+                             className={`p-3 md:p-4 rounded-xl md:rounded-2xl transition-all flex items-center gap-2 border ${showCharConfig ? 'bg-slate-900 text-white border-slate-900 shadow-lg' : 'bg-white text-slate-500 border-slate-100 hover:border-indigo-200'}`}
                              title="إعدادات ثبات الشخصية"
                            >
-                              <User size={20} />
+                              <User size={18} className="md:w-5 md:h-5" />
                               <span className="hidden md:inline font-display text-[10px] font-extrabold uppercase tracking-wider">ثبات الشخصية</span>
                            </button>
                            <button 
                              onClick={generateContent}
                              disabled={isLoading || !input.trim()}
-                             className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:bg-slate-200 text-slate-400 cursor-not-allowed shadow-none px-6 md:px-10 py-4 md:py-5 rounded-2xl flex items-center justify-center gap-3 transition-all duration-300 group shadow-lg shadow-indigo-600/20"
+                             className="flex-1 md:flex-none bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:bg-slate-200 text-slate-400 cursor-not-allowed shadow-none px-6 md:px-10 py-3.5 md:py-5 rounded-xl md:rounded-2xl flex items-center justify-center gap-2 md:gap-3 transition-all duration-300 group shadow-lg shadow-indigo-600/20"
                            >
                              {isLoading ? (
-                               <RefreshCw className="animate-spin w-5 h-5 text-white" />
+                               <RefreshCw className="animate-spin w-4 h-4 md:w-5 md:h-5 text-white" />
                              ) : (
                                <>
-                                 <Sparkles className="w-5 h-5 text-white group-hover:scale-110 transition-transform" />
-                                 <span className="font-display text-sm uppercase tracking-widest font-black text-white">تخليق ذكي</span>
+                                 <Sparkles className="w-4 h-4 md:w-5 md:h-5 text-white group-hover:scale-110 transition-transform" />
+                                 <span className="font-display text-xs md:text-sm uppercase tracking-widest font-black text-white">تخليق ذكي</span>
                                </>
                              )}
                            </button>
@@ -1229,6 +1515,7 @@ export default function App() {
                                       onGenImage={() => generateSceneImage(scene.id, scene.visual)}
                                       onGenAudio={() => generateSceneAudio(scene.id, scene.audio)}
                                       onGenVideo={() => generateSceneVideo(scene.id, scene.visual)}
+                                      onGenVideoWithOptions={(options) => generateSceneVideo(scene.id, scene.visual, options)}
                                       onUpdate={(updates) => updateScene(scene.id, updates)}
                                       isGenerating={activeGeneration[scene.id] || null}
                                       media={mediaResults[scene.id] || null}
@@ -1353,18 +1640,35 @@ export default function App() {
               </div>
             )}
           </AnimatePresence>
+            </div> {/* End of scroll wrapper */}
+          </div> {/* End of main inner container */}
+          
+          {/* Quick float action to reset desktop simulation mode */}
+          {viewMode === 'phone' && (
+            <button 
+              onClick={() => setViewMode('full')}
+              className="hidden lg:flex fixed bottom-8 right-8 items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-black rounded-xl shadow-lg shadow-indigo-600/20 transition-all z-[111] animate-bounce cursor-pointer font-display"
+            >
+              <Monitor size={14} />
+              <span>العودة للشاشة الكاملة 🖥️</span>
+            </button>
+          )}
+        </main>
+        
+        {/* Mobile Bottom Navigation style (Shows on standard mobile OR inside desktop phone mockup) */}
+        <div className={`${
+          viewMode === 'phone' 
+            ? 'lg:absolute lg:flex lg:bottom-4 lg:left-1/2 lg:-translate-x-1/2 lg:w-[90%] lg:z-[145] lg:bg-indigo-950/95 lg:px-4 lg:rounded-2xl lg:shadow-[0_10px_30px_rgba(0,0,0,0.3)] lg:border lg:border-indigo-800/40' 
+            : 'lg:hidden'
+        } md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] bg-indigo-900 border border-indigo-700/50 z-[110] px-4 rounded-3xl shadow-2xl backdrop-blur-xl transition-all duration-300`}>
+          <div className="flex justify-around items-center h-16 w-full">
+            <MobileNavItem active={activeTool === 'script'} icon={<Clapperboard size={18} />} label="السيناريو" onClick={() => setActiveTool('script')} />
+            <MobileNavItem active={activeTool === 'ideas'} icon={<Lightbulb size={18} />} label="أفكار" onClick={() => setActiveTool('ideas')} />
+            <MobileNavItem active={activeTool === 'prompt'} icon={<Terminal size={18} />} label="مطالبة" onClick={() => setActiveTool('prompt')} />
+            <MobileNavItem active={activeTool === 'youtube'} icon={<Youtube size={18} />} label="يوتيوب" onClick={() => setActiveTool('youtube')} />
+            <MobileNavItem active={activeTool === 'history'} icon={<Database size={18} />} label="أرشيف" onClick={() => setActiveTool('history')} />
+          </div>
         </div>
-      </main>
-      {/* Mobile Bottom Navigation */}
-      <div className="md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 w-[90%] bg-indigo-900 border border-indigo-700/50 z-[110] px-4 rounded-3xl shadow-2xl backdrop-blur-xl">
-        <div className="flex justify-around items-center h-16">
-          <MobileNavItem active={activeTool === 'script'} icon={<Clapperboard size={18} />} label="السيناريو" onClick={() => setActiveTool('script')} />
-          <MobileNavItem active={activeTool === 'ideas'} icon={<Lightbulb size={18} />} label="أفكار" onClick={() => setActiveTool('ideas')} />
-          <MobileNavItem active={activeTool === 'prompt'} icon={<Terminal size={18} />} label="مطالبة" onClick={() => setActiveTool('prompt')} />
-          <MobileNavItem active={activeTool === 'youtube'} icon={<Youtube size={18} />} label="يوتيوب" onClick={() => setActiveTool('youtube')} />
-          <MobileNavItem active={activeTool === 'history'} icon={<Database size={18} />} label="أرشيف" onClick={() => setActiveTool('history')} />
-        </div>
-      </div>
     </div>
   </div>
   );

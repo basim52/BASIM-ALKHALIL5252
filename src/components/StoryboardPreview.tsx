@@ -81,6 +81,41 @@ export function StoryboardPreview({ script, mediaResults, title }: StoryboardPre
   const togglePlay = () => setIsPlaying(!isPlaying);
   const toggleMute = () => setIsMuted(!isMuted);
 
+  const transitionType = currentScene?.transitionType || 'none';
+
+  const animateProps = (() => {
+    switch (transitionType) {
+      case 'cross_fade':
+        return {
+          initial: { opacity: 0 },
+          animate: { opacity: 1 },
+          exit: { opacity: 0 },
+          transition: { duration: 1.2, ease: "easeInOut" }
+        };
+      case 'push_pan':
+        return {
+          initial: { x: 250, opacity: 0 },
+          animate: { x: 0, opacity: 1 },
+          exit: { x: -250, opacity: 0 },
+          transition: { duration: 0.8, ease: "easeInOut" }
+        };
+      case 'match_frame':
+        return {
+          initial: { opacity: 0.8, scale: 0.98 },
+          animate: { opacity: 1, scale: 1 },
+          exit: { opacity: 0.8, scale: 0.98 },
+          transition: { duration: 0.3, ease: "linear" }
+        };
+      default:
+        return {
+          initial: { opacity: 0, scale: 1.05 },
+          animate: { opacity: 1, scale: 1 },
+          exit: { opacity: 0, scale: 0.95 },
+          transition: { duration: 0.5 }
+        };
+    }
+  })();
+
   if (!script || script.length === 0) return null;
 
   return (
@@ -100,10 +135,7 @@ export function StoryboardPreview({ script, mediaResults, title }: StoryboardPre
         <AnimatePresence mode="wait">
           <motion.div 
             key={currentSceneIndex}
-            initial={{ opacity: 0, scale: 1.1 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 1 }}
+            {...animateProps}
             className="absolute inset-0"
           >
             {videoMedia ? (
